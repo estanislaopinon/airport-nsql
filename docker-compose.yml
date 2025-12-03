@@ -1,0 +1,41 @@
+version: '3.8'
+services:
+  mongo:
+    image: mongo:latest
+    ports:
+      - '27018:27017'
+    volumes:
+      - mongo-data:/data/db
+  redis-geo:
+    image: redis:latest
+    ports:
+      - '6379:6379'
+    command: redis-server --save "" --appendonly no
+  redis-pop:
+    image: redis:latest
+    ports:
+      - '6380:6379'
+    command: redis-server --save "" --appendonly no
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - '3000:3000'
+    depends_on:
+      - mongo
+      - redis-geo
+      - redis-pop
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/airport_db
+      - REDIS_GEO_HOST=redis-geo
+      - REDIS_POP_HOST=redis-pop
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - '5173:5173'
+    command: npm run dev -- --host 0.0.0.0
+    depends_on:
+      - backend
+volumes:
+  mongo-data:
