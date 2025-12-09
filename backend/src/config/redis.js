@@ -1,3 +1,4 @@
+//Conexion a Redis 
 const { createClient } = require('redis');
 
 const redisGeo = createClient({ url: `redis://${process.env.REDIS_GEO_HOST}:6379` });

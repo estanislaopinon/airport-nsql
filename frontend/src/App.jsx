@@ -1,12 +1,15 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { MapContainer, TileLayer, useMap } from 'react-leaflet';
 import AirportMarkers from './components/AirportMarkers';
 import './index.css';
 
+// Componente auxiliar para forzar el redimensionado del mapa cuando cambia el contenedor
 function MapResize() {
   const map = useMap();
   useEffect(() => {
+    // invalidar tamaño al montar para que Leaflet calcule correctamente
     map.invalidateSize();
+    // observar cambios de tamaño y notificar al mapa
     const resizeObserver = new ResizeObserver(() => map.invalidateSize());
     resizeObserver.observe(map.getContainer());
     return () => resizeObserver.disconnect();
@@ -14,14 +17,22 @@ function MapResize() {
   return null;
 }
 
+/*
+  Componente principal de la aplicación:
+  - Muestra un mapa con marcadores (AirportMarkers)
+  - Botones flotantes para ver Top 10 populares y abrir el CRUD de aeropuertos
+  - Panel lateral con Top 10 y modal con CRUD (crear/editar/listar/borrar)
+*/
 function App() {
+  // Estado para ajustar los límites del mapa desde los marcadores
   const [mapBounds, setMapBounds] = useState(null);
 
-  // ==================== TOP 10 POPULARES ====================
+  // TOP 10 AEROPUERTOS POPULARES
   const [popularAirports, setPopularAirports] = useState([]);
   const [showPopular, setShowPopular] = useState(false);
   const [loadingPopular, setLoadingPopular] = useState(false);
 
+  // Fetch para obtener el top 10 desde la API (backend)
   const fetchPopular = async () => {
     setLoadingPopular(true);
     try {
@@ -35,25 +46,27 @@ function App() {
     }
   };
 
+  // Toggle del panel de populares; carga datos la primera vez que se abre
   const togglePopular = () => {
     setShowPopular(!showPopular);
     if (!showPopular) fetchPopular();
   };
 
-  // ==================== CRUD + DEBOUNCE ====================
-  const [showCrud, setShowCrud] = useState(false);
-  const [activeTab, setActiveTab] = useState('crear');
-
-  const [airports, setAirports] = useState([]);
+  // CRUD + DEBOUNCE
+  const [showCrud, setShowCrud] = useState(false); // mostrar modal CRUD
+  const [activeTab, setActiveTab] = useState('crear'); // pestaña activa del modal
+  const [airports, setAirports] = useState([]); // lista completa desde backend
   const [loadingCrud, setLoadingCrud] = useState(false);
 
+  // Formulario para crear/editar aeropuerto
   const [form, setForm] = useState({
     iata_code: '', icao: '', name: '', city: '', country: '',
     latitude: '', longitude: '', altitude: '', timezone: ''
   });
-  const [editingId, setEditingId] = useState(null);
 
-  // Debounce para búsqueda
+  const [editingId, setEditingId] = useState(null); // identificador en edición (IATA o ICAO)
+
+  // Debounce para búsqueda en la lista (evitar consultas por cada tecla)
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const debounceTimeout = useRef(null);
@@ -62,10 +75,11 @@ function App() {
     if (debounceTimeout.current) clearTimeout(debounceTimeout.current);
     debounceTimeout.current = setTimeout(() => {
       setDebouncedSearch(search);
-    }, 400);
+    }, 400); // 400ms de debounce
     return () => clearTimeout(debounceTimeout.current);
   }, [search]);
 
+  // Cargar todos los aeropuertos desde la API (usado por la pestaña Lista)
   const loadAirports = async () => {
     setLoadingCrud(true);
     try {
@@ -79,14 +93,17 @@ function App() {
     }
   };
 
+  // Abrir modal CRUD y cargar lista inicial
   const openCrud = () => {
     setShowCrud(true);
     setActiveTab('crear');
     loadAirports();
   };
 
+  // Envío del formulario para crear o actualizar un aeropuerto
   const handleSubmit = async (e) => {
     e.preventDefault();
+    // Preparar payload: convertir strings numéricos a tipos numéricos adecuados
     const payload = {
       ...form,
       latitude: form.latitude ? parseFloat(form.latitude) : undefined,
@@ -96,6 +113,7 @@ function App() {
 
     try {
       if (editingId) {
+        // Actualizar
         await fetch(`http://localhost:3000/airports/${editingId}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
@@ -103,6 +121,7 @@ function App() {
         });
         alert('Aeropuerto actualizado');
       } else {
+        // Crear nuevo
         await fetch('http://localhost:3000/airports', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -110,6 +129,8 @@ function App() {
         });
         alert('Aeropuerto creado');
       }
+
+      // Resetar formulario y recargar lista
       setForm({ iata_code: '', icao: '', name: '', city: '', country: '', latitude: '', longitude: '', altitude: '', timezone: '' });
       setEditingId(null);
       loadAirports();
@@ -118,6 +139,7 @@ function App() {
     }
   };
 
+  // Rellenar el formulario para editar un aeropuerto existente
   const editAirport = (airport) => {
     setForm({
       iata_code: airport.iata_code || '',
@@ -134,6 +156,7 @@ function App() {
     setActiveTab('crear');
   };
 
+  // Borrar aeropuerto por identificador (pide confirmación)
   const deleteAirport = async (identifier) => {
     if (!window.confirm(`¿Borrar ${identifier}?`)) return;
     try {
@@ -145,17 +168,26 @@ function App() {
     }
   };
 
-  const filtered = airports.filter(a =>
-    [a.name, a.iata_code, a.icao, a.city, a.country].some(field =>
-      field?.toString().toLowerCase().includes(debouncedSearch.toLowerCase())
-    )
-  );
+  // Filtrado memoizado de la lista según la búsqueda (optimizado)
+  const filtered = useMemo(() => {
+    if (!debouncedSearch.trim()) return airports;
+
+    const term = debouncedSearch.toLowerCase().trim();
+
+    return airports.filter(a =>
+      [a.name, a.iata_code, a.icao, a.city, a.country, a.timezone].some(field =>
+        String(field || '').toLowerCase().includes(term)
+      )
+    );
+  }, [airports, debouncedSearch]);
 
   return (
     <>
+      {/* Mapa principal */}
       <MapContainer center={[0, 0]} zoom={2} style={{ height: '100vh', width: '100%' }} bounds={mapBounds} minZoom={2}>
         <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution='© OpenStreetMap' noWrap={true} />
         <MapResize />
+        {/* Componente que dibuja marcadores y puede actualizar los límites del mapa */}
         <AirportMarkers setMapBounds={setMapBounds} />
       </MapContainer>
 
@@ -172,7 +204,7 @@ function App() {
 
       {/* PANEL TOP 10 */}
       {showPopular && (
-        <div style={{ position: 'fixed', top: 0, right: 0, width: '380px', height: '100vh', background: 'rgba(255,255,255,0.98)', backdropFilter: 'blur(10px)', boxShadow: '-6px 0 30px rgba(0,0,0,0.2)', zIndex: 999, padding: '20px', overflowY: 'auto' }}>
+        <div style={{ position: 'fixed', top: 0, right: 0, width: '380px', height: '100vh', background: 'rgba(255,255,255,0.98)', backdropFilter: 'blur(10px)', boxShadow: '-6px 0 30px rgba(0,0,0,0,0.2)', zIndex: 999, padding: '20px', overflowY: 'auto' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
             <h2 style={{ margin: 0 }}>Top 10 Más Visitados</h2>
             <button onClick={() => setShowPopular(false)} style={{ background: 'none', border: 'none', fontSize: '30px', cursor: 'pointer' }}>×</button>
@@ -196,7 +228,6 @@ function App() {
              onClick={() => setShowCrud(false)}>
           <div style={{ background: 'white', width: '95%', maxWidth: '1100px', height: '92%', borderRadius: '16px', overflow: 'hidden', boxShadow: '0 25px 70px rgba(0,0,0,0.5)' }}
                onClick={e => e.stopPropagation()}>
-
             <div style={{ padding: '20px', background: '#1f2937', color: 'white', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h2 style={{ margin: 0 }}>Gestor de Aeropuertos</h2>
               <button onClick={() => setShowCrud(false)} style={{ background: 'none', border: 'none', color: 'white', fontSize: '32px', cursor: 'pointer' }}>×</button>
@@ -233,7 +264,6 @@ function App() {
                     </form>
                   </div>
 
-                  {/* BOTONES FIJOS AL FONDO */}
                   <div style={{ padding: '20px 30px', borderTop: '1px solid #e5e7eb', background: 'white', display: 'flex', justifyContent: 'flex-end', gap: '16px' }}>
                     <button onClick={handleSubmit} style={{ ...btnStyle, background: '#10b981', padding: '14px 32px', minWidth: '220px' }}>
                       {editingId ? 'Actualizar Aeropuerto' : 'Crear Aeropuerto'}
@@ -249,7 +279,6 @@ function App() {
                   </div>
                 </div>
               ) : (
-                /* PESTAÑA LISTA */
                 <div style={{ flex: 1, padding: '30px', overflowY: 'auto' }}>
                   <h3 style={{ marginTop: 0 }}>Lista de aeropuertos</h3>
                   <input placeholder="Buscar..." value={search} onChange={e => setSearch(e.target.value)} style={{ ...inputStyle, width: '100%', marginBottom: '15px' }} />
@@ -294,7 +323,7 @@ function App() {
   );
 }
 
-// ESTILOS
+// Estilos reutilizables (constantes fuera del componente para evitar recrearlos cada render)
 const inputStyle = { width: '100%', padding: '14px 16px', borderRadius: '10px', border: '1px solid #d1d5db', fontSize: '15px', background: '#fff' };
 const btnStyle = { padding: '14px 24px', color: 'white', border: 'none', borderRadius: '10px', cursor: 'pointer', fontWeight: 'bold', fontSize: '16px' };
 const miniBtn = { padding: '7px 12px', color: 'white', border: 'none', borderRadius: '6px', fontSize: '13px', cursor: 'pointer' };
